@@ -1,0 +1,70 @@
+spring:
+  application:
+    name: mdm-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mdm
+    username: mdm
+    password: mdm
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks entities match it, never auto-generates DDL.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    locations: classpath:db/migration
+
+  cloud:
+    gcp:
+      # Points Spring Cloud GCP's OWN credentials/project resolution (used
+      # by GcpContextAutoConfiguration and Pub/Sub) at the same service
+      # account file AndroidManagementConfig uses manually - these were
+      # previously two separate, unconfigured credential paths, which is
+      # why every boot log up to now logged "default credentials not
+      # found" even though AndroidManagement calls worked fine regardless.
+      project-id: ${MDM_GCP_PROJECT_ID:}
+      credentials:
+        location: ${MDM_GCP_CREDENTIALS_PATH:file:secrets/android-management-sa.json}
+
+mdm:
+  gcp:
+    project-id: ${MDM_GCP_PROJECT_ID:}
+    # Local-dev default: a gitignored file at the project root. Production
+    # should point this at a mounted Secret Manager-sourced file instead of
+    # a key checked out on disk long-term.
+    android-management-credentials-path: ${MDM_GCP_CREDENTIALS_PATH:file:secrets/android-management-sa.json}
+    # Base URL Google redirects the admin's browser back to after enterprise
+    # sign-up. Google rejects http:// callback URLs outright
+    # (INSECURE_CALLBACK_URL), even for localhost - hence https here backed
+    # by the self-signed dev cert below. Swap to your real public HTTPS URL
+    # outside local dev.
+    android-management-callback-base-url: ${MDM_CALLBACK_BASE_URL:https://localhost:8080}
+    # Pull subscription GmsNotificationListener reads from. Blank = listener
+    # stays off (e.g. in tests) rather than failing to start.
+    pubsub-subscription-id: ${MDM_GCP_PUBSUB_SUBSCRIPTION_ID:}
+
+  dpc:
+    # How often the custom (non-GMS) DPC app should poll /api/dpc/checkin.
+    # Echoed back in every checkin/enroll response so it can be tuned
+    # without an app update.
+    check-in-interval-seconds: ${MDM_DPC_CHECK_IN_INTERVAL_SECONDS:60}
+
+  auth:
+    # HS256 needs >= 256 bits (32 chars) - this dev default is long enough
+    # to pass that check, but is a well-known placeholder, not a secret.
+    # MUST be overridden with a real random value outside local dev, or
+    # every admin JWT this backend ever issues is forgeable by anyone who
+    # reads this file.
+    jwt-secret: ${MDM_JWT_SECRET:dev-only-jwt-secret-change-me-before-any-real-deployment}
+    jwt-expiration-minutes: ${MDM_JWT_EXPIRATION_MINUTES:480}
+
+server:
+  port: 8080
+  ssl:
+    enabled: true
+    key-store: file:secrets/dev-keystore.p12
+    key-store-password: changeit
+    key-store-type: PKCS12
+    key-alias: mdm-backend-dev
