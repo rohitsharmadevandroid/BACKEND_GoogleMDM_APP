@@ -38,7 +38,8 @@ button:hover { background: #1d4ed8; }
 .nav-btn { background: none; color: #1a1a1a; text-align: left; border-radius: 0; padding: 0.6rem 1.5rem; border: none; }
 .nav-btn:hover { background: #e2e4e9; }
 .nav-btn.active { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
-.nav-btn.logout { margin-top: auto; color: #dc2626; }
+.nav-btn.switch-account { margin-top: auto; color: #475569; }
+.nav-btn.logout { color: #dc2626; }
 
 #content { flex: 1; padding: 1.5rem 2rem; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; margin: 1rem 0; background: white; }

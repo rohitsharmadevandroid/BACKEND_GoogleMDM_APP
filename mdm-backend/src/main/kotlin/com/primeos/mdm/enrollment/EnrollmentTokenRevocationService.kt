@@ -29,6 +29,7 @@ class EnrollmentTokenRevocationService(
             id = saved.id!!,
             deviceType = saved.deviceType,
             tokenValue = saved.tokenValue,
+            qrCodeData = saved.qrCodeData,
             status = saved.status,
             maxUses = saved.maxUses,
             usedCount = saved.usedCount,

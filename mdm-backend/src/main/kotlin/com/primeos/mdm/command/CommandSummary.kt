@@ -8,6 +8,7 @@ data class CommandSummary(
     val commandType: CommandType,
     val status: CommandStatus,
     val payload: CommandParams,
+    val resultData: Map<String, String>,
     val errorMessage: String?,
     val dispatchedAt: Instant?,
     val completedAt: Instant?,

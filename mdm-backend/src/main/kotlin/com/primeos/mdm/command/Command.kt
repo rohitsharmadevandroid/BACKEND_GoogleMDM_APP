@@ -63,6 +63,14 @@ class Command(
     @Column(nullable = false, columnDefinition = "jsonb")
     var payload: String = "{}",
 
+    // Free-form key/value data the DPC collected in response to this
+    // command (currently only meaningful for REQUEST_DEVICE_INFO) - set
+    // via the same ack call that reports COMPLETED/FAILED, since there's
+    // no separate "report data" endpoint.
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "result_data", nullable = false, columnDefinition = "jsonb")
+    var resultData: String = "{}",
+
     @Column(name = "gms_command_resource_name")
     var gmsCommandResourceName: String? = null,
 

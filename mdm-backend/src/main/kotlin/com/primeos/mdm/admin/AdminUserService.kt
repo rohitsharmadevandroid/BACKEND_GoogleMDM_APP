@@ -15,10 +15,31 @@ class AdminUserService(
     private val adminAccessGuard: AdminAccessGuard,
 ) {
 
+    // SUPER_ADMIN.organizationId must be null (platform-level, per
+    // AdminAccessGuard.requireOrganizationAccess treating a null org as
+    // "can touch anything"); ORG_ADMIN/ORG_VIEWER must have one, since both
+    // roles are meaningless without an org to scope to and the dashboard's
+    // very first call after login (loading the Devices list) uses
+    // state.activeOrgId verbatim in the URL - with no org, that call goes
+    // out as literally /api/organizations/null/devices and 500s on UUID
+    // parsing. Nothing enforced this before; a real test account got
+    // created as ORG_ADMIN with no org and broke exactly this way.
     @Transactional
     fun create(request: CreateAdminUserRequest): AdminUserResponse {
         if (adminUserRepository.findByEmail(request.email) != null) {
             throw DuplicateEmailException(request.email)
+        }
+        when (request.role) {
+            AdminRole.SUPER_ADMIN -> if (request.organizationId != null) {
+                throw AdminUserRoleOrganizationMismatchException(
+                    "SUPER_ADMIN accounts are platform-level and must not be assigned to an organization"
+                )
+            }
+            AdminRole.ORG_ADMIN, AdminRole.ORG_VIEWER -> if (request.organizationId == null) {
+                throw AdminUserRoleOrganizationMismatchException(
+                    "${request.role} accounts must be assigned to an organization"
+                )
+            }
         }
 
         val organization = request.organizationId?.let { organizationId ->

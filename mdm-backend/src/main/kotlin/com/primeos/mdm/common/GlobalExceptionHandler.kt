@@ -1,6 +1,7 @@
 package com.primeos.mdm.common
 
 import com.primeos.mdm.admin.AdminUserNotFoundException
+import com.primeos.mdm.admin.AdminUserRoleOrganizationMismatchException
 import com.primeos.mdm.admin.DuplicateEmailException
 import com.primeos.mdm.admin.InvalidCredentialsException
 import com.primeos.mdm.admin.OrganizationAccessDeniedException
@@ -14,6 +15,7 @@ import com.primeos.mdm.enterprise.GmsEnterpriseAlreadyExistsException
 import com.primeos.mdm.enterprise.NoGmsEnterpriseException
 import com.primeos.mdm.enterprise.NoPendingGmsSignupException
 import com.primeos.mdm.organization.DuplicateSlugException
+import com.primeos.mdm.organization.OrganizationHasAdminUsersException
 import com.primeos.mdm.organization.OrganizationNotFoundException
 import com.primeos.mdm.policy.PolicyNotFoundException
 import org.springframework.http.HttpStatus
@@ -48,6 +50,7 @@ class GlobalExceptionHandler {
         DuplicateSlugException::class,
         DuplicateEmailException::class,
         GmsEnterpriseAlreadyExistsException::class,
+        OrganizationHasAdminUsersException::class,
     )
     fun handleConflict(ex: RuntimeException): ResponseEntity<Map<String, String?>> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(mapOf("error" to ex.message))
@@ -58,6 +61,7 @@ class GlobalExceptionHandler {
         NoGmsEnterpriseException::class,
         NoPendingGmsSignupException::class,
         PolicyOrganizationMismatchException::class,
+        AdminUserRoleOrganizationMismatchException::class,
     )
     fun handleBadRequest(ex: RuntimeException): ResponseEntity<Map<String, String?>> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(mapOf("error" to ex.message))

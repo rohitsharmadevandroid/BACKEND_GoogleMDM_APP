@@ -1,5 +1,6 @@
 package com.primeos.mdm.enrollment
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.primeos.mdm.admin.AdminAccessGuard
 import com.primeos.mdm.device.DeviceType
 import com.primeos.mdm.organization.Organization
@@ -23,10 +24,14 @@ class NonGmsEnrollmentTokenServiceTest {
     private val policyRepository = mock(PolicyRepository::class.java)
     private val enrollmentTokenRepository = mock(EnrollmentTokenRepository::class.java)
 
+    // Blank config everywhere -> isConfigured() false -> issueToken always
+    // falls back to the placeholder QR in these tests, matching current
+    // real-world behavior until the Android side's facts are known.
     private val service = NonGmsEnrollmentTokenService(
         organizationRepository,
         policyRepository,
         enrollmentTokenRepository,
+        NonGmsProvisioningQrCodeBuilder(jacksonObjectMapper(), "", "", ""),
         mock(AdminAccessGuard::class.java),
     )
 

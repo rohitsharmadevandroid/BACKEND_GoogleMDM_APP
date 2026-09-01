@@ -8,6 +8,7 @@ data class EnrollmentTokenSummary(
     val id: UUID,
     val deviceType: DeviceType,
     val tokenValue: String,
+    val qrCodeData: String?,
     val status: EnrollmentTokenStatus,
     val maxUses: Int,
     val usedCount: Int,

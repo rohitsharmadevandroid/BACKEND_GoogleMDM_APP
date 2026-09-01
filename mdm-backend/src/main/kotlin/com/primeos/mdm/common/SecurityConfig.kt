@@ -80,6 +80,11 @@ class SecurityConfig {
                     // everywhere else.
                     .requestMatchers(HttpMethod.POST, "/api/organizations").hasRole("SUPER_ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/organizations").hasRole("SUPER_ADMIN")
+                    // Deleting an organization is a hard, cascading delete of
+                    // every device/policy/command/enrollment token under it -
+                    // SUPER_ADMIN-only, same tier as creating one, not the
+                    // generic SUPER_ADMIN-or-ORG_ADMIN DELETE rule below.
+                    .requestMatchers(HttpMethod.DELETE, "/api/organizations/*").hasRole("SUPER_ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/**").authenticated()
                     .requestMatchers(HttpMethod.POST, "/api/**").hasAnyRole("SUPER_ADMIN", "ORG_ADMIN")
                     .requestMatchers(HttpMethod.PUT, "/api/**").hasAnyRole("SUPER_ADMIN", "ORG_ADMIN")

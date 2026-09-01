@@ -7,6 +7,31 @@
 
 let state = { token: null, role: null, organizationId: null, activeOrgId: null, email: null };
 
+// Polls a device's command history while its detail view is open, so
+// status/result updates (SENT -> COMPLETED, etc.) show up without a manual
+// page reload. Only one of these ever runs at a time - stopCommandPolling()
+// is called before starting a new one and on navigating away.
+let commandPollTimer = null;
+
+function stopCommandPolling() {
+  if (commandPollTimer) {
+    clearInterval(commandPollTimer);
+    commandPollTimer = null;
+  }
+}
+
+// Same idea as commandPollTimer, but for the Enrollment Tokens list - so a
+// token flipping ACTIVE -> CONSUMED (a device just enrolled with it) or
+// -> REVOKED shows up without a manual reload.
+let tokenPollTimer = null;
+
+function stopTokenPolling() {
+  if (tokenPollTimer) {
+    clearInterval(tokenPollTimer);
+    tokenPollTimer = null;
+  }
+}
+
 function escapeHtml(value) {
   if (value === null || value === undefined) return '';
   return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -46,6 +71,8 @@ async function login(email, password) {
 }
 
 function logout(message) {
+  stopCommandPolling();
+  stopTokenPolling();
   state = { token: null, role: null, organizationId: null, activeOrgId: null, email: null };
   sessionStorage.removeItem('mdm_session');
   showLogin(message);
@@ -78,6 +105,8 @@ const RENDERERS = {
 };
 
 function navigate(section) {
+  stopCommandPolling();
+  stopTokenPolling();
   document.querySelectorAll('.nav-btn[data-section]').forEach((b) => b.classList.toggle('active', b.dataset.section === section));
   const content = document.getElementById('content');
   content.innerHTML = '<p class="loading">Loading…</p>';
@@ -99,8 +128,17 @@ function renderSidebar() {
   if (state.role === 'SUPER_ADMIN') links.push(['all-admins', 'All Admin Users']);
 
   nav.innerHTML = links.map(([id, label]) => `<button class="nav-btn" data-section="${id}">${escapeHtml(label)}</button>`).join('')
+    // Both buttons do the exact same thing under the hood - clear the
+    // session and show the login form - there's no real "switch role"
+    // concept (that would mean a client-side privilege escalation, which
+    // this app deliberately never allows: your role comes from which
+    // account you authenticate as, nothing else). "Switch account" is just
+    // a more honestly-labeled entry point for "I want to log in as someone
+    // else right now", sitting next to "Log out" rather than replacing it.
+    + '<button class="nav-btn switch-account" id="switch-account-btn">Switch account</button>'
     + '<button class="nav-btn logout" id="logout-btn">Log out</button>';
   nav.querySelectorAll('.nav-btn[data-section]').forEach((btn) => btn.addEventListener('click', () => navigate(btn.dataset.section)));
+  document.getElementById('switch-account-btn').addEventListener('click', () => logout());
   document.getElementById('logout-btn').addEventListener('click', () => logout());
 }
 
@@ -133,11 +171,15 @@ async function renderOrganizations() {
               <td>${escapeHtml(o.name)}</td>
               <td>${escapeHtml(o.slug)}</td>
               <td>${escapeHtml(o.status)}</td>
-              <td><button class="manage-btn" data-org-id="${o.id}">Manage</button></td>
+              <td>
+                <button class="manage-btn" data-org-id="${o.id}">Manage</button>
+                <button class="delete-org-btn" data-org-id="${o.id}" data-org-name="${escapeHtml(o.name)}">Delete</button>
+              </td>
             </tr>
           `).join('')}
         </tbody>
-      </table>`;
+      </table>
+      <p id="delete-org-error" class="error"></p>`;
 
     content.querySelector('#create-org-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -150,6 +192,16 @@ async function renderOrganizations() {
       }
     });
     content.querySelectorAll('.manage-btn').forEach((btn) => btn.addEventListener('click', () => enterOrganization(btn.dataset.orgId)));
+    content.querySelectorAll('.delete-org-btn').forEach((btn) => btn.addEventListener('click', async () => {
+      const name = btn.dataset.orgName;
+      if (!confirm(`Permanently delete "${name}" and everything under it - all its devices, policies, commands, and enrollment tokens? This cannot be undone.`)) return;
+      try {
+        await api(`/api/organizations/${btn.dataset.orgId}`, { method: 'DELETE' });
+        renderOrganizations();
+      } catch (err) {
+        content.querySelector('#delete-org-error').textContent = err.message;
+      }
+    }));
   } catch (err) {
     content.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
   }
@@ -187,7 +239,31 @@ async function renderDevices() {
   }
 }
 
+function commandRowsHtml(commands) {
+  return commands.map((c) => `
+    <tr>
+      <td>${escapeHtml(c.commandType)}</td>
+      <td>${escapeHtml(c.status)}</td>
+      <td>${c.createdAt ? new Date(c.createdAt).toLocaleString() : ''}</td>
+      <td>${escapeHtml(c.errorMessage || '')}</td>
+      <td>${Object.keys(c.resultData || {}).length ? `<pre>${escapeHtml(JSON.stringify(c.resultData, null, 2))}</pre>` : '&mdash;'}</td>
+    </tr>
+  `).join('');
+}
+
+async function refreshCommandHistory(deviceId) {
+  const body = document.getElementById('command-history-body');
+  if (!body) { stopCommandPolling(); return; }
+  try {
+    const commands = await api(`/api/devices/${deviceId}/commands`);
+    body.innerHTML = commandRowsHtml(commands);
+  } catch (err) {
+    stopCommandPolling();
+  }
+}
+
 async function renderDeviceDetail(deviceId) {
+  stopCommandPolling();
   const el = document.getElementById('device-detail');
   el.innerHTML = '<p class="loading">Loading…</p>';
   try {
@@ -234,25 +310,17 @@ async function renderDeviceDetail(deviceId) {
       </form>
       <p id="command-error" class="error"></p>
 
-      <h4>Command history</h4>
+      <h4>Command history <span class="loading">(auto-refreshes every 5s)</span></h4>
       <table>
-        <thead><tr><th>Type</th><th>Status</th><th>Created</th><th>Error</th></tr></thead>
-        <tbody>
-          ${commands.map((c) => `
-            <tr>
-              <td>${escapeHtml(c.commandType)}</td>
-              <td>${escapeHtml(c.status)}</td>
-              <td>${c.createdAt ? new Date(c.createdAt).toLocaleString() : ''}</td>
-              <td>${escapeHtml(c.errorMessage || '')}</td>
-            </tr>
-          `).join('')}
-        </tbody>
+        <thead><tr><th>Type</th><th>Status</th><th>Created</th><th>Error</th><th>Result data</th></tr></thead>
+        <tbody id="command-history-body">${commandRowsHtml(commands)}</tbody>
       </table>`;
 
     el.querySelector('#unenroll-btn').addEventListener('click', async () => {
       if (!confirm('Unenroll this device? For GMS devices this also wipes it; for non-GMS devices, queue and confirm a WIPE command first if you need data wiped too.')) return;
       try {
         await api(`/api/devices/${deviceId}`, { method: 'DELETE', body: JSON.stringify({}) });
+        stopCommandPolling();
         renderDevices();
       } catch (err) {
         el.querySelector('#unenroll-error').textContent = err.message;
@@ -306,6 +374,8 @@ async function renderDeviceDetail(deviceId) {
         el.querySelector('#command-error').textContent = err.message;
       }
     });
+
+    commandPollTimer = setInterval(() => refreshCommandHistory(deviceId), 5000);
   } catch (err) {
     el.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
   }
@@ -451,12 +521,89 @@ async function renderPolicyEdit(policyId) {
 
 // ---- Enrollment tokens ----
 
+// Renders a scannable QR code as an <img> tag (data: URL, generated fully
+// client-side via the vendored qrcode.js - no external service, works
+// offline). typeNumber=0 lets the library auto-pick the smallest QR version
+// that fits the data; GMS qrCodeData in particular can be a large JSON blob.
+function qrImgTag(data) {
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(data);
+    qr.make();
+    return qr.createImgTag(4, 8);
+  } catch (err) {
+    return `<p class="error">Could not render QR: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function tokenRowsHtml(tokens) {
+  return tokens.map((t) => `
+    <tr>
+      <td>${escapeHtml(t.deviceType)}</td>
+      <td><code>${escapeHtml(t.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(t.tokenValue)}">Copy</button></td>
+      <td>${escapeHtml(t.status)}</td>
+      <td>${t.usedCount} / ${t.maxUses}</td>
+      <td>${t.createdAt ? new Date(t.createdAt).toLocaleString() : ''}</td>
+      <td>
+        ${t.qrCodeData && t.status === 'ACTIVE' && (!t.expiresAt || new Date(t.expiresAt) > new Date()) ? `<button class="qr-btn" data-token-id="${t.id}">Show QR</button>` : ''}
+        ${t.status === 'ACTIVE' ? `<button class="revoke-btn" data-token-id="${t.id}">Revoke</button>` : ''}
+      </td>
+    </tr>
+  `).join('');
+}
+
+// Rebinds the row-level button listeners against #token-list-body specifically
+// (not the whole #content) - called both after the initial render and after
+// every polling refresh, since replacing a tbody's innerHTML destroys its
+// old listeners.
+function attachTokenRowListeners(tokens) {
+  const body = document.getElementById('token-list-body');
+  if (!body) return;
+  body.querySelectorAll('.revoke-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    try {
+      await api(`/api/enrollment-tokens/${btn.dataset.tokenId}/revoke`, { method: 'POST' });
+      renderTokens();
+    } catch (err) {
+      alert(err.message);
+    }
+  }));
+  body.querySelectorAll('.copy-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(btn.dataset.copyValue);
+      const original = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (err) {
+      alert('Could not copy to clipboard: ' + err.message);
+    }
+  }));
+  body.querySelectorAll('.qr-btn').forEach((btn) => btn.addEventListener('click', () => {
+    const t = tokens.find((x) => x.id === btn.dataset.tokenId);
+    const el = document.getElementById('token-qr-display');
+    if (!t) return;
+    el.innerHTML = `<h4>QR for ${escapeHtml(t.deviceType)} token</h4>${qrImgTag(t.qrCodeData)}`;
+  }));
+}
+
+async function refreshTokenRows() {
+  const body = document.getElementById('token-list-body');
+  if (!body) { stopTokenPolling(); return; }
+  try {
+    const tokens = await api(`/api/organizations/${state.activeOrgId}/enrollment-tokens`);
+    body.innerHTML = tokenRowsHtml(tokens);
+    attachTokenRowListeners(tokens);
+  } catch (err) {
+    stopTokenPolling();
+  }
+}
+
 async function renderTokens() {
+  stopTokenPolling();
   const content = document.getElementById('content');
   try {
     const tokens = await api(`/api/organizations/${state.activeOrgId}/enrollment-tokens`);
     content.innerHTML = `
-      <h2>Enrollment Tokens</h2>
+      <h2>Enrollment Tokens <span class="loading">(auto-refreshes every 5s)</span></h2>
       <div class="two-col">
         <form id="create-gms-token-form" class="stacked-form">
           <h4>New GMS token</h4>
@@ -475,19 +622,9 @@ async function renderTokens() {
       <div id="new-token-result"></div>
       <table>
         <thead><tr><th>Type</th><th>Token</th><th>Status</th><th>Uses</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          ${tokens.map((t) => `
-            <tr>
-              <td>${escapeHtml(t.deviceType)}</td>
-              <td><code>${escapeHtml(t.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(t.tokenValue)}">Copy</button></td>
-              <td>${escapeHtml(t.status)}</td>
-              <td>${t.usedCount} / ${t.maxUses}</td>
-              <td>${t.createdAt ? new Date(t.createdAt).toLocaleString() : ''}</td>
-              <td>${t.status === 'ACTIVE' ? `<button class="revoke-btn" data-token-id="${t.id}">Revoke</button>` : ''}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>`;
+        <tbody id="token-list-body">${tokenRowsHtml(tokens)}</tbody>
+      </table>
+      <div id="token-qr-display"></div>`;
 
     content.querySelector('#create-gms-token-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -497,8 +634,9 @@ async function renderTokens() {
           method: 'POST',
           body: JSON.stringify({ policyName: fd.get('policyName'), oneTimeOnly: fd.get('oneTimeOnly') === 'on' }),
         });
-        document.getElementById('new-token-result').innerHTML =
-          `<p>Created. Token value: <code>${escapeHtml(result.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.tokenValue)}">Copy</button></p>`;
+        document.getElementById('new-token-result').innerHTML = `
+          <p>Created. Token value: <code>${escapeHtml(result.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.tokenValue)}">Copy</button></p>
+          ${result.qrCodeData ? `<p><strong>Scan to provision (real Device Owner QR):</strong></p>${qrImgTag(result.qrCodeData)}` : ''}`;
         renderTokens();
       } catch (err) {
         content.querySelector('#gms-token-error').textContent = err.message;
@@ -512,31 +650,17 @@ async function renderTokens() {
           method: 'POST',
           body: JSON.stringify({ maxUses: parseInt(fd.get('maxUses'), 10) || 1 }),
         });
-        document.getElementById('new-token-result').innerHTML =
-          `<p>Created. Token value: <code>${escapeHtml(result.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.tokenValue)}">Copy</button></p>`;
+        document.getElementById('new-token-result').innerHTML = `
+          <p>Created. Token value: <code>${escapeHtml(result.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.tokenValue)}">Copy</button></p>
+          ${result.qrCodeData ? `<p><strong>QR (placeholder token payload - not a real Device Owner provisioning QR yet):</strong></p>${qrImgTag(result.qrCodeData)}` : ''}`;
         renderTokens();
       } catch (err) {
         content.querySelector('#nongms-token-error').textContent = err.message;
       }
     });
-    content.querySelectorAll('.revoke-btn').forEach((btn) => btn.addEventListener('click', async () => {
-      try {
-        await api(`/api/enrollment-tokens/${btn.dataset.tokenId}/revoke`, { method: 'POST' });
-        renderTokens();
-      } catch (err) {
-        alert(err.message);
-      }
-    }));
-    content.querySelectorAll('.copy-btn').forEach((btn) => btn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(btn.dataset.copyValue);
-        const original = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = original; }, 1500);
-      } catch (err) {
-        alert('Could not copy to clipboard: ' + err.message);
-      }
-    }));
+
+    attachTokenRowListeners(tokens);
+    tokenPollTimer = setInterval(refreshTokenRows, 5000);
   } catch (err) {
     content.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
   }
@@ -565,7 +689,11 @@ async function renderOrgAdmins() {
 async function renderAllAdmins() {
   const content = document.getElementById('content');
   try {
-    const admins = await api('/api/admin-users');
+    const [admins, orgs] = await Promise.all([api('/api/admin-users'), api('/api/organizations')]);
+    // org id -> name, so the table can show a readable org name instead of a raw UUID
+    const orgNameById = {};
+    orgs.forEach((o) => { orgNameById[o.id] = o.name; });
+
     content.innerHTML = `
       <h2>All Admin Users</h2>
       <details>
@@ -573,12 +701,15 @@ async function renderAllAdmins() {
         <form id="create-admin-form" class="stacked-form">
           <input name="email" type="email" placeholder="Email" required>
           <input name="password" type="password" placeholder="Password" required>
-          <select name="role">
+          <select name="role" id="create-admin-role">
             <option value="SUPER_ADMIN">SUPER_ADMIN</option>
             <option value="ORG_ADMIN">ORG_ADMIN</option>
             <option value="ORG_VIEWER">ORG_VIEWER</option>
           </select>
-          <input name="organizationId" placeholder="Organization ID (blank for platform SUPER_ADMIN)">
+          <select name="organizationId" id="create-admin-org">
+            <option value="">(none - SUPER_ADMIN only)</option>
+            ${orgs.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('')}
+          </select>
           <button type="submit">Create</button>
         </form>
         <p id="create-admin-error" class="error"></p>
@@ -590,7 +721,7 @@ async function renderAllAdmins() {
             <tr>
               <td>${escapeHtml(a.email)}</td>
               <td>${escapeHtml(a.role)}</td>
-              <td>${escapeHtml(a.organizationId || '-')}</td>
+              <td>${escapeHtml(a.organizationId ? (orgNameById[a.organizationId] || a.organizationId) : '-')}</td>
               <td>${a.isActive}</td>
               <td>${a.isActive ? `<button class="deactivate-btn" data-admin-id="${a.id}">Deactivate</button>` : ''}</td>
             </tr>
@@ -601,15 +732,29 @@ async function renderAllAdmins() {
     content.querySelector('#create-admin-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const orgId = (fd.get('organizationId') || '').trim();
+      const role = fd.get('role');
+      const orgId = fd.get('organizationId') || null;
+      const errorEl = content.querySelector('#create-admin-error');
+      // Mirrors the backend's own validation (AdminUserService.create) so
+      // the mistake that caused this feature to be added - an ORG_ADMIN
+      // created with no org, whose dashboard then 500s on the very first
+      // API call after login - gets caught here instead of round-tripping.
+      if (role === 'SUPER_ADMIN' && orgId) {
+        errorEl.textContent = 'SUPER_ADMIN accounts must not be assigned to an organization.';
+        return;
+      }
+      if (role !== 'SUPER_ADMIN' && !orgId) {
+        errorEl.textContent = `${role} accounts must be assigned to an organization.`;
+        return;
+      }
       try {
         await api('/api/admin-users', {
           method: 'POST',
-          body: JSON.stringify({ email: fd.get('email'), password: fd.get('password'), role: fd.get('role'), organizationId: orgId || null }),
+          body: JSON.stringify({ email: fd.get('email'), password: fd.get('password'), role, organizationId: orgId }),
         });
         renderAllAdmins();
       } catch (err) {
-        content.querySelector('#create-admin-error').textContent = err.message;
+        errorEl.textContent = err.message;
       }
     });
     content.querySelectorAll('.deactivate-btn').forEach((btn) => btn.addEventListener('click', async () => {

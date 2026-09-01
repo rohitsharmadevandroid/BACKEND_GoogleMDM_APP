@@ -22,6 +22,7 @@ class EnrollmentTokenQueryService(
                 id = it.id!!,
                 deviceType = it.deviceType,
                 tokenValue = it.tokenValue,
+                qrCodeData = it.qrCodeData,
                 status = it.status,
                 maxUses = it.maxUses,
                 usedCount = it.usedCount,

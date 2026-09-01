@@ -1,6 +1,7 @@
 package com.primeos.mdm.command
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.primeos.mdm.admin.AdminAccessGuard
 import com.primeos.mdm.device.Device
 import com.primeos.mdm.device.DeviceNotFoundException
@@ -81,6 +82,7 @@ class DeviceCommandService(
                 commandType = it.commandType,
                 status = it.status,
                 payload = objectMapper.readValue(it.payload, CommandParams::class.java),
+                resultData = objectMapper.readValue(it.resultData),
                 errorMessage = it.errorMessage,
                 dispatchedAt = it.dispatchedAt,
                 completedAt = it.completedAt,

@@ -1,5 +1,6 @@
 package com.primeos.mdm.dpc
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.primeos.mdm.command.Command
 import com.primeos.mdm.command.CommandNotFoundException
 import com.primeos.mdm.command.CommandRepository
@@ -13,6 +14,7 @@ import java.util.UUID
 @Service
 class DpcCommandAckService(
     private val commandRepository: CommandRepository,
+    private val objectMapper: ObjectMapper,
 ) {
 
     @Transactional
@@ -26,6 +28,9 @@ class DpcCommandAckService(
 
         command.status = request.status
         command.errorMessage = request.errorMessage
+        if (request.resultData != null) {
+            command.resultData = objectMapper.writeValueAsString(request.resultData)
+        }
         if (request.status == CommandStatus.COMPLETED || request.status == CommandStatus.FAILED) {
             command.completedAt = Instant.now()
         }

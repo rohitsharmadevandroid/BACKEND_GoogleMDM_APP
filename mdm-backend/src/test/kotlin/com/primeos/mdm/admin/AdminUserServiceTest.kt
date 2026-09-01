@@ -67,6 +67,41 @@ class AdminUserServiceTest {
     }
 
     @Test
+    fun `rejects an ORG_ADMIN with no organization`() {
+        given(adminUserRepository.findByEmail("orphan@primeos.test")).willReturn(null)
+
+        assertThrows(AdminUserRoleOrganizationMismatchException::class.java) {
+            service.create(CreateAdminUserRequest(email = "orphan@primeos.test", password = "x", role = AdminRole.ORG_ADMIN))
+        }
+    }
+
+    @Test
+    fun `rejects an ORG_VIEWER with no organization`() {
+        given(adminUserRepository.findByEmail("orphan@primeos.test")).willReturn(null)
+
+        assertThrows(AdminUserRoleOrganizationMismatchException::class.java) {
+            service.create(CreateAdminUserRequest(email = "orphan@primeos.test", password = "x", role = AdminRole.ORG_VIEWER))
+        }
+    }
+
+    @Test
+    fun `rejects a SUPER_ADMIN with an organization`() {
+        val organizationId = UUID.randomUUID()
+        given(adminUserRepository.findByEmail("scoped-super@primeos.test")).willReturn(null)
+
+        assertThrows(AdminUserRoleOrganizationMismatchException::class.java) {
+            service.create(
+                CreateAdminUserRequest(
+                    email = "scoped-super@primeos.test",
+                    password = "x",
+                    role = AdminRole.SUPER_ADMIN,
+                    organizationId = organizationId,
+                )
+            )
+        }
+    }
+
+    @Test
     fun `rejects an unknown organization`() {
         val unknownId = UUID.randomUUID()
         given(adminUserRepository.findByEmail("admin@acme.test")).willReturn(null)

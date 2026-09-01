@@ -50,6 +50,16 @@ mdm:
     # Echoed back in every checkin/enroll response so it can be tuned
     # without an app update.
     check-in-interval-seconds: ${MDM_DPC_CHECK_IN_INTERVAL_SECONDS:60}
+    # All three below are needed together to produce a real Android Device
+    # Owner provisioning QR (NonGmsProvisioningQrCodeBuilder) - leave any one
+    # blank and non-GMS enrollment tokens keep using the
+    # {"enrollmentToken":"..."} placeholder QR instead. These describe the
+    # Google_MDM Android app's own build, not this backend, so they can't be
+    # derived here - set them once that app has a real DeviceAdminReceiver,
+    # a hosted APK, and a signing cert.
+    device-admin-component-name: ${MDM_DPC_DEVICE_ADMIN_COMPONENT_NAME:}
+    apk-download-url: ${MDM_DPC_APK_DOWNLOAD_URL:}
+    apk-signature-checksum: ${MDM_DPC_APK_SIGNATURE_CHECKSUM:}
 
   auth:
     # HS256 needs >= 256 bits (32 chars) - this dev default is long enough

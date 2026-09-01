@@ -17,6 +17,7 @@ class NonGmsEnrollmentTokenService(
     private val organizationRepository: OrganizationRepository,
     private val policyRepository: PolicyRepository,
     private val enrollmentTokenRepository: EnrollmentTokenRepository,
+    private val provisioningQrCodeBuilder: NonGmsProvisioningQrCodeBuilder,
     private val adminAccessGuard: AdminAccessGuard,
 ) {
 
@@ -39,13 +40,13 @@ class NonGmsEnrollmentTokenService(
                 organization = organization,
                 deviceType = DeviceType.NON_GMS,
                 tokenValue = tokenValue,
-                // A real Device Owner provisioning QR (the
-                // PROVISIONING_ADMIN_EXTRAS_BUNDLE format) needs a package
-                // name, APK download URL, and signing cert checksum - none
-                // of which exist until the actual DPC app is built and
-                // hosted somewhere. This is a placeholder the DPC app can
-                // read tokenValue from directly for now.
-                qrCodeData = """{"enrollmentToken":"$tokenValue"}""",
+                // Real Device Owner provisioning QR once
+                // mdm.dpc.device-admin-component-name/apk-download-url/
+                // apk-signature-checksum are all configured; falls back to
+                // the placeholder {"enrollmentToken":"..."} until then (see
+                // NonGmsProvisioningQrCodeBuilder for why it's not built here
+                // unconditionally).
+                qrCodeData = provisioningQrCodeBuilder.build(tokenValue) ?: """{"enrollmentToken":"$tokenValue"}""",
                 defaultPolicy = defaultPolicy,
                 maxUses = request.maxUses,
             )
