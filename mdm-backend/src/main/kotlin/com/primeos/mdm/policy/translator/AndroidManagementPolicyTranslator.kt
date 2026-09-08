@@ -34,10 +34,22 @@ class AndroidManagementPolicyTranslator {
                 .setPackageName(restriction.packageName)
                 .setInstallType(googleInstallType(restriction.installType))
         }
+        // Verified live against the real Android Management API (not from
+        // docs): setting kioskCustomLauncherEnabled=true together with any
+        // KIOSK-installType application is rejected outright -
+        // "Kiosk install type cannot be used if kioskCustomLauncherEnabled
+        // is true" (400 INVALID_ARGUMENT). Google treats these as two
+        // separate, mutually exclusive kiosk mechanisms; our internal
+        // KioskModeConfig only models "lock to these specific packages", so
+        // this only ever uses the per-app KIOSK installType, never the
+        // custom-launcher toggle. Also gated on kiosk.enabled now - before
+        // this fix, allowedPackageNames were marked KIOSK even when
+        // enabled=false.
         definition.kioskMode?.let { kiosk ->
-            policy.setKioskCustomLauncherEnabled(kiosk.enabled)
-            kiosk.allowedPackageNames.forEach { packageName ->
-                applications += ApplicationPolicy().setPackageName(packageName).setInstallType("KIOSK")
+            if (kiosk.enabled) {
+                kiosk.allowedPackageNames.forEach { packageName ->
+                    applications += ApplicationPolicy().setPackageName(packageName).setInstallType("KIOSK")
+                }
             }
         }
         policy.setApplications(applications)

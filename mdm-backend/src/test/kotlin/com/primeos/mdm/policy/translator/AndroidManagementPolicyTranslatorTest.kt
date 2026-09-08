@@ -73,16 +73,30 @@ class AndroidManagementPolicyTranslatorTest {
     }
 
     @Test
-    fun `translates kiosk mode into kioskCustomLauncherEnabled and KIOSK-typed applications`() {
+    fun `translates kiosk mode into KIOSK-typed applications, never kioskCustomLauncherEnabled`() {
+        // Google's real API rejects kioskCustomLauncherEnabled=true combined
+        // with any KIOSK-installType app (confirmed via a live 400 from
+        // policies.patch) - this must never be set alongside KIOSK apps.
         val definition = PolicyDefinition(
             kioskMode = KioskModeConfig(enabled = true, allowedPackageNames = listOf("com.example.kiosk")),
         )
 
         val policy = translator.translate(definition)
 
-        assertEquals(true, policy.kioskCustomLauncherEnabled)
+        assertEquals(null, policy.kioskCustomLauncherEnabled)
         val kioskApp = policy.applications.single { it.packageName == "com.example.kiosk" }
         assertEquals("KIOSK", kioskApp.installType)
+    }
+
+    @Test
+    fun `does not mark packages KIOSK when kiosk mode is disabled`() {
+        val definition = PolicyDefinition(
+            kioskMode = KioskModeConfig(enabled = false, allowedPackageNames = listOf("com.example.notkiosk")),
+        )
+
+        val policy = translator.translate(definition)
+
+        assertTrue(policy.applications.none { it.packageName == "com.example.notkiosk" })
     }
 
     @Test

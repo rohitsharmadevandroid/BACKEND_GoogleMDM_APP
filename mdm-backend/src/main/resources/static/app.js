@@ -314,7 +314,26 @@ async function renderDeviceDetail(deviceId) {
       <table>
         <thead><tr><th>Type</th><th>Status</th><th>Created</th><th>Error</th><th>Result data</th></tr></thead>
         <tbody id="command-history-body">${commandRowsHtml(commands)}</tbody>
-      </table>`;
+      </table>
+
+      ${device.deviceType === 'NON_GMS' ? `
+        <details>
+          <summary>GMS Migration (advanced)</summary>
+          <p class="loading">Moves this device from our custom DPC to being managed for real via Google's Android Management API / Android Device Policy - a separate thing from a fresh GMS enrollment. playDeviceId and playUserId come from the device's own AMAPI SDK (AccountSetupClient's resulting EnterpriseAccount) - they can't be looked up here, the app must report them to you first.</p>
+          <form id="migration-token-form" class="stacked-form">
+            <input name="playDeviceId" placeholder="playDeviceId (from EnterpriseAccount.getDeviceId())" required>
+            <input name="playUserId" placeholder="playUserId (from EnterpriseAccount.getUserId())" required>
+            <select name="policyId" required>
+              <option value="">Select a policy to apply after migration</option>
+              ${policies.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}${p.isActive ? '' : ' (inactive)'}</option>`).join('')}
+            </select>
+            <input name="ttlSeconds" type="number" min="1" placeholder="Token TTL in seconds (optional, max 7 days)">
+            <button type="submit">Create migration token</button>
+          </form>
+          <p id="migration-token-error" class="error"></p>
+          <div id="migration-token-result"></div>
+        </details>
+      ` : ''}`;
 
     el.querySelector('#unenroll-btn').addEventListener('click', async () => {
       if (!confirm('Unenroll this device? For GMS devices this also wipes it; for non-GMS devices, queue and confirm a WIPE command first if you need data wiped too.')) return;
@@ -374,6 +393,41 @@ async function renderDeviceDetail(deviceId) {
         el.querySelector('#command-error').textContent = err.message;
       }
     });
+
+    const migrationForm = el.querySelector('#migration-token-form');
+    if (migrationForm) {
+      migrationForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const ttlRaw = (fd.get('ttlSeconds') || '').trim();
+        try {
+          const result = await api(`/api/devices/${deviceId}/gms-migration-token`, {
+            method: 'POST',
+            body: JSON.stringify({
+              playDeviceId: fd.get('playDeviceId'),
+              playUserId: fd.get('playUserId'),
+              policyId: fd.get('policyId'),
+              ttlSeconds: ttlRaw ? parseInt(ttlRaw, 10) : null,
+            }),
+          });
+          document.getElementById('migration-token-result').innerHTML = `
+            <p>Created (expires ${escapeHtml(result.expireTime || 'unknown')}). Token value: <code>${escapeHtml(result.value)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.value)}">Copy</button></p>
+            <p class="loading">Send this value to the device's DpcMigrationClient.migrate() call to complete the migration.</p>`;
+          el.querySelectorAll('#migration-token-result .copy-btn').forEach((btn) => btn.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(btn.dataset.copyValue);
+              const original = btn.textContent;
+              btn.textContent = 'Copied!';
+              setTimeout(() => { btn.textContent = original; }, 1500);
+            } catch (err) {
+              alert('Could not copy to clipboard: ' + err.message);
+            }
+          }));
+        } catch (err) {
+          el.querySelector('#migration-token-error').textContent = err.message;
+        }
+      });
+    }
 
     commandPollTimer = setInterval(() => refreshCommandHistory(deviceId), 5000);
   } catch (err) {
@@ -536,6 +590,22 @@ function qrImgTag(data) {
   }
 }
 
+// Shared by every plain "copy this value" button across the dashboard that
+// isn't already covered by attachTokenRowListeners' own scoped binding.
+function attachCopyButtons(root) {
+  if (!root) return;
+  root.querySelectorAll('.copy-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(btn.dataset.copyValue);
+      const original = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (err) {
+      alert('Could not copy to clipboard: ' + err.message);
+    }
+  }));
+}
+
 function tokenRowsHtml(tokens) {
   return tokens.map((t) => `
     <tr>
@@ -601,15 +671,24 @@ async function renderTokens() {
   stopTokenPolling();
   const content = document.getElementById('content');
   try {
-    const tokens = await api(`/api/organizations/${state.activeOrgId}/enrollment-tokens`);
+    const [tokens, policies, migrationTokens] = await Promise.all([
+      api(`/api/organizations/${state.activeOrgId}/enrollment-tokens`),
+      api(`/api/organizations/${state.activeOrgId}/policies`),
+      api(`/api/organizations/${state.activeOrgId}/gms-migration-tokens`),
+    ]);
     content.innerHTML = `
       <h2>Enrollment Tokens <span class="loading">(auto-refreshes every 5s)</span></h2>
       <div class="two-col">
         <form id="create-gms-token-form" class="stacked-form">
           <h4>New GMS token</h4>
-          <input name="policyName" placeholder="enterprises/.../policies/default" required>
-          <label><input type="checkbox" name="oneTimeOnly" checked> One-time only</label>
-          <button type="submit">Create GMS token</button>
+          ${policies.length ? `
+            <select name="policyId" required>
+              ${policies.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}${p.isActive ? '' : ' (inactive)'}</option>`).join('')}
+            </select>
+            <label><input type="checkbox" name="oneTimeOnly" checked> One-time only</label>
+            <label><input type="checkbox" name="allowPersonalUsage" checked> Allow Work Profile / BYOD (uncheck for fully-managed only - requires EMM certification, currently blocked)</label>
+            <button type="submit">Create GMS token</button>
+          ` : `<p class="loading">Create a policy first - a GMS token needs one to sync to Google.</p>`}
           <p id="gms-token-error" class="error"></p>
         </form>
         <form id="create-nongms-token-form" class="stacked-form">
@@ -624,19 +703,37 @@ async function renderTokens() {
         <thead><tr><th>Type</th><th>Token</th><th>Status</th><th>Uses</th><th>Created</th><th></th></tr></thead>
         <tbody id="token-list-body">${tokenRowsHtml(tokens)}</tbody>
       </table>
-      <div id="token-qr-display"></div>`;
+      <div id="token-qr-display"></div>
+
+      <h3>GMS Migration Tokens</h3>
+      <p class="loading">Created from a device's own detail page (GMS Migration section) - listed here too so every token type is in one place.</p>
+      <table>
+        <thead><tr><th>Device</th><th>Policy</th><th>Token</th><th>Expires</th><th>Created</th></tr></thead>
+        <tbody id="migration-token-list-body">
+          ${migrationTokens.length ? migrationTokens.map((t) => `
+            <tr>
+              <td>${escapeHtml(t.deviceName || t.deviceId)}</td>
+              <td>${escapeHtml(t.policyName)}</td>
+              <td><code>${escapeHtml(t.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(t.tokenValue)}">Copy</button></td>
+              <td>${t.expiresAt ? new Date(t.expiresAt).toLocaleString() : ''}</td>
+              <td>${t.createdAt ? new Date(t.createdAt).toLocaleString() : ''}</td>
+            </tr>
+          `).join('') : '<tr><td colspan="5" class="loading">None yet</td></tr>'}
+        </tbody>
+      </table>`;
 
     content.querySelector('#create-gms-token-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       try {
+        const allowPersonalUsage = fd.get('allowPersonalUsage') === 'on' ? 'PERSONAL_USAGE_ALLOWED' : 'PERSONAL_USAGE_DISALLOWED';
         const result = await api(`/api/organizations/${state.activeOrgId}/gms-enrollment-tokens`, {
           method: 'POST',
-          body: JSON.stringify({ policyName: fd.get('policyName'), oneTimeOnly: fd.get('oneTimeOnly') === 'on' }),
+          body: JSON.stringify({ policyId: fd.get('policyId'), oneTimeOnly: fd.get('oneTimeOnly') === 'on', allowPersonalUsage }),
         });
         document.getElementById('new-token-result').innerHTML = `
-          <p>Created. Token value: <code>${escapeHtml(result.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.tokenValue)}">Copy</button></p>
-          ${result.qrCodeData ? `<p><strong>Scan to provision (real Device Owner QR):</strong></p>${qrImgTag(result.qrCodeData)}` : ''}`;
+          <p>Created (${allowPersonalUsage === 'PERSONAL_USAGE_ALLOWED' ? 'Work Profile / BYOD allowed' : 'fully-managed only'}). Token value: <code>${escapeHtml(result.tokenValue)}</code> <button class="copy-btn" data-copy-value="${escapeHtml(result.tokenValue)}">Copy</button></p>
+          ${result.qrCodeData ? `<p><strong>Scan to provision:</strong></p>${qrImgTag(result.qrCodeData)}` : ''}`;
         renderTokens();
       } catch (err) {
         content.querySelector('#gms-token-error').textContent = err.message;
@@ -660,6 +757,7 @@ async function renderTokens() {
     });
 
     attachTokenRowListeners(tokens);
+    attachCopyButtons(document.getElementById('migration-token-list-body'));
     tokenPollTimer = setInterval(refreshTokenRows, 5000);
   } catch (err) {
     content.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;

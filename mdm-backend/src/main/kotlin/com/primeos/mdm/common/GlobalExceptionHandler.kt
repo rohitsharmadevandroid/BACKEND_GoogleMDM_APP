@@ -10,6 +10,7 @@ import com.primeos.mdm.device.DeviceNotFoundException
 import com.primeos.mdm.device.InvalidDeviceStateException
 import com.primeos.mdm.device.PolicyOrganizationMismatchException
 import com.primeos.mdm.enrollment.EnrollmentTokenNotFoundException
+import com.primeos.mdm.enrollment.GmsPolicyOrganizationMismatchException
 import com.primeos.mdm.enrollment.InvalidEnrollmentTokenException
 import com.primeos.mdm.enterprise.GmsEnterpriseAlreadyExistsException
 import com.primeos.mdm.enterprise.NoGmsEnterpriseException
@@ -62,6 +63,7 @@ class GlobalExceptionHandler {
         NoPendingGmsSignupException::class,
         PolicyOrganizationMismatchException::class,
         AdminUserRoleOrganizationMismatchException::class,
+        GmsPolicyOrganizationMismatchException::class,
     )
     fun handleBadRequest(ex: RuntimeException): ResponseEntity<Map<String, String?>> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(mapOf("error" to ex.message))

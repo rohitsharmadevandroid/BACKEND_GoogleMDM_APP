@@ -4,6 +4,7 @@ import com.google.api.services.androidmanagement.v1.AndroidManagement
 import com.google.api.services.androidmanagement.v1.model.Command as GoogleCommand
 import com.google.api.services.androidmanagement.v1.model.EnrollmentToken as GoogleEnrollmentToken
 import com.google.api.services.androidmanagement.v1.model.Enterprise
+import com.google.api.services.androidmanagement.v1.model.MigrationToken
 import com.google.api.services.androidmanagement.v1.model.Operation
 import com.google.api.services.androidmanagement.v1.model.Policy as GooglePolicy
 import com.google.api.services.androidmanagement.v1.model.SignupUrl
@@ -97,5 +98,43 @@ class AndroidManagementService(
             request.setWipeReasonMessage(wipeReasonMessage)
         }
         request.execute()
+    }
+
+    // Mints a token for Google's documented DPC-migration flow (moving a
+    // device that's currently managed by a third-party custom DPC over to
+    // being managed via the Android Management API / Android Device
+    // Policy), NOT a fresh enrollment - see enterprises.migrationTokens.create.
+    // deviceId/userId are required, immutable, and NOT derivable from
+    // anything else in this API - verified (javap on the real jar) that
+    // they only exist as the output of a successful on-device
+    // AccountSetupClient round trip (its resulting EnterpriseAccount
+    // carries both), so the caller must supply real values obtained that
+    // way, not anything this backend can compute itself. managementMode is
+    // always "FULLY_MANAGED" here since every device eligible for this
+    // migration is already Device Owner via the custom DPC - never a
+    // work-profile scenario.
+    fun createMigrationToken(
+        enterpriseName: String,
+        playDeviceId: String,
+        playUserId: String,
+        policyName: String,
+        ttlSeconds: Long?,
+        additionalData: String?,
+    ): MigrationToken {
+        var body = MigrationToken()
+            .setDeviceId(playDeviceId)
+            .setUserId(playUserId)
+            .setPolicy(policyName)
+            .setManagementMode("FULLY_MANAGED")
+        if (ttlSeconds != null) {
+            body = body.setTtl("${ttlSeconds}s")
+        }
+        if (additionalData != null) {
+            body = body.setAdditionalData(additionalData)
+        }
+
+        return androidManagement.enterprises().migrationTokens()
+            .create(enterpriseName, body)
+            .execute()
     }
 }

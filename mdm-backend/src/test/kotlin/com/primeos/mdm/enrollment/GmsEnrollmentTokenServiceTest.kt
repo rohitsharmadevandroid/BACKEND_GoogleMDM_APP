@@ -10,13 +10,20 @@ import com.primeos.mdm.enterprise.NoGmsEnterpriseException
 import com.primeos.mdm.organization.Organization
 import com.primeos.mdm.organization.OrganizationNotFoundException
 import com.primeos.mdm.organization.OrganizationRepository
+import com.primeos.mdm.policy.Policy
+import com.primeos.mdm.policy.PolicyNotFoundException
+import com.primeos.mdm.policy.PolicyRepository
+import com.primeos.mdm.policy.PolicySyncResult
+import com.primeos.mdm.policy.PolicyTranslationService
+import com.primeos.mdm.policy.translator.CustomDpcPolicyPayload
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.ArgumentMatchers.any
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.mock
+import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import java.util.Optional
 import java.util.UUID
 
@@ -25,24 +32,30 @@ class GmsEnrollmentTokenServiceTest {
     private val androidManagementService = mock(AndroidManagementService::class.java)
     private val organizationRepository = mock(OrganizationRepository::class.java)
     private val gmsEnterpriseRepository = mock(GmsEnterpriseRepository::class.java)
+    private val policyRepository = mock(PolicyRepository::class.java)
+    private val policyTranslationService = mock(PolicyTranslationService::class.java)
     private val enrollmentTokenRepository = mock(EnrollmentTokenRepository::class.java)
 
     private val service = GmsEnrollmentTokenService(
         androidManagementService,
         organizationRepository,
         gmsEnterpriseRepository,
+        policyRepository,
+        policyTranslationService,
         enrollmentTokenRepository,
         mock(AdminAccessGuard::class.java),
     )
 
     private val organizationId = UUID.randomUUID()
-    private val organization = Organization(name = "Acme", slug = "acme")
+    private val organization = Organization(name = "Acme", slug = "acme").apply { id = organizationId }
     private val gmsEnterprise = GmsEnterprise(
         organization = organization,
         enterpriseName = "enterprises/LC00abc123",
         gcpProjectId = "test-project",
         serviceAccountSecretRef = "secrets/android-management-sa.json",
     )
+    private val policyId = UUID.randomUUID()
+    private val policy = Policy(organization = organization, name = "Default", definition = "{}").apply { id = policyId }
 
     @BeforeEach
     fun setUp() {
@@ -50,15 +63,22 @@ class GmsEnrollmentTokenServiceTest {
     }
 
     @Test
-    fun `issues a GMS enrollment token and persists it`() {
+    fun `resolves the internal policy, syncs it, and issues a token with the computed gmsPolicyName`() {
         given(gmsEnterpriseRepository.findByOrganizationId(organizationId)).willReturn(gmsEnterprise)
+        given(policyRepository.findById(policyId)).willReturn(Optional.of(policy))
+        given(policyTranslationService.syncPolicy(policyId)).willReturn(
+            PolicySyncResult(
+                customDpcPayload = CustomDpcPolicyPayload(),
+                gmsPolicyName = "enterprises/LC00abc123/policies/$policyId",
+            )
+        )
         given(
             androidManagementService.createEnrollmentToken(
-                enterpriseName = "enterprises/LC00abc123",
-                policyName = "enterprises/LC00abc123/policies/default",
-                oneTimeOnly = true,
-                allowPersonalUsage = "PERSONAL_USAGE_DISALLOWED",
-                durationSeconds = 3600L,
+                enterpriseName = eq("enterprises/LC00abc123"),
+                policyName = eq("enterprises/LC00abc123/policies/$policyId"),
+                oneTimeOnly = eq(true),
+                allowPersonalUsage = eq("PERSONAL_USAGE_DISALLOWED"),
+                durationSeconds = eq(3600L),
             )
         ).willReturn(
             GoogleEnrollmentToken()
@@ -67,21 +87,17 @@ class GmsEnrollmentTokenServiceTest {
                 .setQrCode("""{"android.app.extra.PROVISIONING_MODE":true}""")
                 .setExpirationTimestamp("2026-08-21T10:00:00.000Z")
         )
-        given(enrollmentTokenRepository.save(any(EnrollmentToken::class.java))).willAnswer { it.arguments[0] }
+        given(enrollmentTokenRepository.save(any())).willAnswer { it.arguments[0] }
 
         val result = service.issueGmsEnrollmentToken(
             organizationId,
-            GmsEnrollmentTokenRequest(
-                policyName = "enterprises/LC00abc123/policies/default",
-                oneTimeOnly = true,
-                allowPersonalUsage = "PERSONAL_USAGE_DISALLOWED",
-                durationSeconds = 3600L,
-            ),
+            GmsEnrollmentTokenRequest(policyId = policyId, oneTimeOnly = true, durationSeconds = 3600L),
         )
 
         assertEquals("RAWTOKENVALUE", result.tokenValue)
         assertEquals(DeviceType.GMS, result.deviceType)
         assertEquals(1, result.maxUses)
+        assertEquals(policyId, result.defaultPolicy?.id)
     }
 
     @Test
@@ -90,7 +106,7 @@ class GmsEnrollmentTokenServiceTest {
         given(organizationRepository.findById(unknownId)).willReturn(Optional.empty())
 
         assertThrows(OrganizationNotFoundException::class.java) {
-            service.issueGmsEnrollmentToken(unknownId, GmsEnrollmentTokenRequest(policyName = "irrelevant"))
+            service.issueGmsEnrollmentToken(unknownId, GmsEnrollmentTokenRequest(policyId = policyId))
         }
     }
 
@@ -99,7 +115,29 @@ class GmsEnrollmentTokenServiceTest {
         given(gmsEnterpriseRepository.findByOrganizationId(organizationId)).willReturn(null)
 
         assertThrows(NoGmsEnterpriseException::class.java) {
-            service.issueGmsEnrollmentToken(organizationId, GmsEnrollmentTokenRequest(policyName = "irrelevant"))
+            service.issueGmsEnrollmentToken(organizationId, GmsEnrollmentTokenRequest(policyId = policyId))
+        }
+    }
+
+    @Test
+    fun `rejects an unknown policy`() {
+        given(gmsEnterpriseRepository.findByOrganizationId(organizationId)).willReturn(gmsEnterprise)
+        given(policyRepository.findById(policyId)).willReturn(Optional.empty())
+
+        assertThrows(PolicyNotFoundException::class.java) {
+            service.issueGmsEnrollmentToken(organizationId, GmsEnrollmentTokenRequest(policyId = policyId))
+        }
+    }
+
+    @Test
+    fun `rejects a policy that belongs to a different organization`() {
+        val otherOrganization = Organization(name = "Other", slug = "other").apply { id = UUID.randomUUID() }
+        val otherPolicy = Policy(organization = otherOrganization, name = "Other", definition = "{}").apply { id = policyId }
+        given(gmsEnterpriseRepository.findByOrganizationId(organizationId)).willReturn(gmsEnterprise)
+        given(policyRepository.findById(policyId)).willReturn(Optional.of(otherPolicy))
+
+        assertThrows(GmsPolicyOrganizationMismatchException::class.java) {
+            service.issueGmsEnrollmentToken(organizationId, GmsEnrollmentTokenRequest(policyId = policyId))
         }
     }
 }
