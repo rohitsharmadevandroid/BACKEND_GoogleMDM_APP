@@ -15,11 +15,16 @@ import java.util.UUID
 class PolicyController(
     private val policyService: PolicyService,
     private val policyTranslationService: PolicyTranslationService,
+    private val apkChecksumService: ApkChecksumService,
 ) {
 
+    // apkChecksumService.resolve() does real network I/O (downloads a REQUIRED
+    // entry's apkUrl to hash it) - it runs here, ahead of PolicyService's
+    // @Transactional methods, so a slow/stalled download never holds a DB
+    // transaction open.
     @PostMapping("/organizations/{organizationId}/policies")
     fun create(@PathVariable organizationId: UUID, @RequestBody request: CreatePolicyRequest): PolicyResponse =
-        policyService.create(organizationId, request)
+        policyService.create(organizationId, request.copy(definition = apkChecksumService.resolve(request.definition)))
 
     @GetMapping("/organizations/{organizationId}/policies")
     fun listByOrganization(@PathVariable organizationId: UUID): List<PolicyResponse> =
@@ -34,7 +39,7 @@ class PolicyController(
     // /sync step below, so edits can be drafted before going live.
     @PutMapping("/policies/{policyId}")
     fun update(@PathVariable policyId: UUID, @RequestBody request: UpdatePolicyRequest): PolicyResponse =
-        policyService.update(policyId, request)
+        policyService.update(policyId, request.copy(definition = apkChecksumService.resolve(request.definition)))
 
     @PostMapping("/policies/{policyId}/sync")
     fun sync(@PathVariable policyId: UUID): PolicySyncResult = policyTranslationService.syncPolicy(policyId)

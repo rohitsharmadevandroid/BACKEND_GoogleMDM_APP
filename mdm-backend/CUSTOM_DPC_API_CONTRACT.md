@@ -157,7 +157,8 @@ policyChanged = (device has an assigned policy) AND (policy.version != request.l
     "allowedPackageNames": []
   },
   "appRestrictions": [
-    { "packageName": "com.example.app", "installType": "REQUIRED" }
+    { "packageName": "com.example.app", "installType": "REQUIRED", "apkUrl": "https://example.com/apks/com.example.app.apk", "apkSha256": "a1b2c3..." },
+    { "packageName": "com.example.blocked", "installType": "BLOCKED" }
   ],
   "wifi": {
     "ssid": "CorpWifi",
@@ -170,6 +171,8 @@ policyChanged = (device has an assigned policy) AND (policy.version != request.l
 Field notes (all verified from `PolicyDefinition` → `CustomDpcPolicyTranslator` → `CustomDpcPolicyPayload`):
 - `password.quality` is a string literal matching Android's `DevicePolicyManager.PASSWORD_QUALITY_*` constant **names** (`PASSWORD_QUALITY_ALPHANUMERIC` or `PASSWORD_QUALITY_SOMETHING` — only these two values currently exist; deliberate design so the DPC can resolve by name instead of a separate vocabulary).
 - `appRestrictions[].installType` is one of `"REQUIRED" | "BLOCKED" | "AVAILABLE"` (string, from enum `.name`) — the DPC decides what to actually do with each; there's no Play EMM integration on this path to enforce it automatically.
+- `appRestrictions[].apkUrl` / `apkSha256` are only ever present when `installType` is `"REQUIRED"` **and** an admin supplied a source for that package — both are `null`/absent otherwise (including for every `BLOCKED`/`AVAILABLE` entry, always). `apkUrl` is a plain HTTPS download URL for the APK; `apkSha256` is its expected SHA-256 checksum, same verify-before-install pattern as the DPC's own APK (`MDM_DPC_APK_DOWNLOAD_URL`/`MDM_DPC_APK_SIGNATURE_CHECKSUM`). A `REQUIRED` entry with no `apkUrl` means exactly what it always has — a label with nothing to act on.
+  - `apkSha256` is now **computed by the backend itself** (`ApkChecksumService`, downloads the APK once at policy save time and hashes it) rather than typed in by an admin — the DPC-facing shape is unchanged, just where the value comes from. A `REQUIRED` entry with an `apkUrl` the backend couldn't download or that exceeded its 150MB cap gets rejected at policy-save time (`400`), so by the time it ever reaches a check-in response, `apkSha256` is guaranteed non-null whenever `apkUrl` is present.
 - `wifi.securityType` is one of `"OPEN" | "WPA2_PSK"`.
 - Any top-level object (`password`, `kioskMode`, `wifi`) can be `null` if that concern isn't configured on the policy.
 - `wifi.password` can be present in plaintext in this payload — it comes straight from the stored `Policy` JSON with no additional encryption at this layer (see Section 10 security notes).

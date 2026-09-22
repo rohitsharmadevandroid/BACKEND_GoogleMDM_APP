@@ -437,14 +437,205 @@ async function renderDeviceDetail(deviceId) {
 
 // ---- Policies ----
 
-const DEFAULT_POLICY_DEFINITION = `{
-  "cameraDisabled": false,
-  "factoryResetDisabled": false,
-  "passwordPolicy": null,
-  "kioskMode": null,
-  "appRestrictions": [],
-  "wifiConfig": null
-}`;
+// ---- Structured policy form ----
+// Replaces raw-JSON policy editing with real controls mapped 1:1 onto
+// PolicyDefinition's fields (see backend PolicyDefinition.kt) - a toggle
+// can't produce a stray string/typo'd key the way a hand-typed JSON blob
+// repeatedly did this project (wrong enum values, invalid combinations
+// like kioskCustomLauncherEnabled+KIOSK installType). Nothing downstream
+// (the translators, PolicyDefinitionCodec) changes - this only changes how
+// the same JSON gets built.
+
+const DEFAULT_POLICY_DEFINITION = {
+  passwordPolicy: null,
+  cameraDisabled: false,
+  factoryResetDisabled: false,
+  screenCaptureDisabled: false,
+  usbFileTransferDisabled: false,
+  safeBootDisabled: false,
+  addUserDisabled: false,
+  outgoingCallsDisabled: false,
+  smsDisabled: false,
+  kioskMode: null,
+  appRestrictions: [],
+  wifiConfig: null,
+};
+
+const POLICY_TOGGLE_FIELDS = [
+  ['cameraDisabled', 'Disable camera'],
+  ['factoryResetDisabled', 'Disable factory reset'],
+  ['screenCaptureDisabled', 'Disable screen capture'],
+  ['usbFileTransferDisabled', 'Disable USB file transfer'],
+  ['safeBootDisabled', 'Disable safe boot'],
+  ['addUserDisabled', 'Disable adding new users'],
+  ['outgoingCallsDisabled', 'Disable outgoing calls'],
+  ['smsDisabled', 'Disable SMS'],
+];
+
+function appRestrictionRowHtml(r) {
+  const pkg = r ? r.packageName : '';
+  const type = r ? r.installType : 'AVAILABLE';
+  const apkUrl = r?.apkUrl || '';
+  const apkSha256 = r?.apkSha256 || '';
+  return `
+    <div class="app-restriction-row">
+      <div class="inline-form">
+        <input class="app-restriction-package" placeholder="Package name (e.g. com.example.app)" value="${escapeHtml(pkg)}">
+        <select class="app-restriction-type">
+          <option value="REQUIRED" ${type === 'REQUIRED' ? 'selected' : ''}>Required</option>
+          <option value="BLOCKED" ${type === 'BLOCKED' ? 'selected' : ''}>Blocked</option>
+          <option value="AVAILABLE" ${type === 'AVAILABLE' ? 'selected' : ''}>Available</option>
+        </select>
+        <button type="button" class="remove-row-btn">Remove</button>
+      </div>
+      <div class="app-restriction-apk-fields inline-form" ${type === 'REQUIRED' ? '' : 'hidden'}>
+        <input class="app-restriction-apk-url" placeholder="APK download URL (leave blank if not silently installable)" value="${escapeHtml(apkUrl)}">
+        <span class="app-restriction-apk-checksum-note">${apkSha256 ? `Checksum verified: <code>${escapeHtml(apkSha256.slice(0, 12))}&hellip;</code>` : 'Checksum is computed automatically from the URL on save'}</span>
+      </div>
+    </div>`;
+}
+
+function kioskPackageRowHtml(pkg) {
+  return `
+    <div class="kiosk-package-row inline-form">
+      <input class="kiosk-package-input" placeholder="Package name (e.g. com.example.launcher)" value="${escapeHtml(pkg || '')}">
+      <button type="button" class="remove-row-btn">Remove</button>
+    </div>`;
+}
+
+function policyFormFieldsHtml(def) {
+  const d = { ...DEFAULT_POLICY_DEFINITION, ...(def || {}) };
+  return `
+    <fieldset class="policy-fields">
+      <legend>Device restrictions</legend>
+      ${POLICY_TOGGLE_FIELDS.map(([field, label]) => `
+        <label><input type="checkbox" data-field="${field}" ${d[field] ? 'checked' : ''}> ${label}</label>
+      `).join('')}
+    </fieldset>
+
+    <fieldset class="policy-fields">
+      <legend><label><input type="checkbox" class="password-policy-toggle" ${d.passwordPolicy ? 'checked' : ''}> Require password policy</label></legend>
+      <div class="password-policy-fields" ${d.passwordPolicy ? '' : 'hidden'}>
+        <input type="number" min="0" class="password-min-length" placeholder="Minimum length" value="${d.passwordPolicy?.minLength ?? ''}">
+        <label><input type="checkbox" class="password-alphanumeric" ${d.passwordPolicy?.requireAlphanumeric ? 'checked' : ''}> Require alphanumeric</label>
+        <input type="number" min="0" class="password-max-failed" placeholder="Max failed attempts before wipe" value="${d.passwordPolicy?.maxFailedAttemptsBeforeWipe ?? ''}">
+      </div>
+    </fieldset>
+
+    <fieldset class="policy-fields">
+      <legend><label><input type="checkbox" class="kiosk-toggle" ${d.kioskMode?.enabled ? 'checked' : ''}> Enable kiosk mode</label></legend>
+      <div class="kiosk-fields" ${d.kioskMode?.enabled ? '' : 'hidden'}>
+        <div class="kiosk-packages-list">${(d.kioskMode?.allowedPackageNames || []).map(kioskPackageRowHtml).join('')}</div>
+        <button type="button" class="add-kiosk-package-btn">+ Add allowed package</button>
+      </div>
+    </fieldset>
+
+    <fieldset class="policy-fields">
+      <legend>App restrictions</legend>
+      <div class="app-restrictions-list">${(d.appRestrictions || []).map(appRestrictionRowHtml).join('')}</div>
+      <button type="button" class="add-app-restriction-btn">+ Add app restriction</button>
+    </fieldset>
+
+    <fieldset class="policy-fields">
+      <legend><label><input type="checkbox" class="wifi-toggle" ${d.wifiConfig ? 'checked' : ''}> Configure Wi-Fi</label></legend>
+      <div class="wifi-fields" ${d.wifiConfig ? '' : 'hidden'}>
+        <input class="wifi-ssid" placeholder="SSID" value="${escapeHtml(d.wifiConfig?.ssid || '')}">
+        <select class="wifi-security-type">
+          <option value="OPEN" ${d.wifiConfig?.securityType === 'OPEN' ? 'selected' : ''}>Open</option>
+          <option value="WPA2_PSK" ${!d.wifiConfig || d.wifiConfig.securityType === 'WPA2_PSK' ? 'selected' : ''}>WPA2-PSK</option>
+        </select>
+        <input type="password" class="wifi-password" placeholder="Password" value="${escapeHtml(d.wifiConfig?.password || '')}" ${d.wifiConfig?.securityType === 'OPEN' ? 'hidden' : ''}>
+        <label><input type="checkbox" class="wifi-hidden" ${d.wifiConfig?.hidden ? 'checked' : ''}> Hidden network</label>
+      </div>
+    </fieldset>`;
+}
+
+// Wires the show/hide toggles and repeatable-row add/remove buttons for a
+// container previously filled with policyFormFieldsHtml() - scoped to that
+// container so the create form and a simultaneously-open edit form never
+// interfere with each other's rows/toggles.
+function wirePolicyFormFields(container) {
+  const passwordToggle = container.querySelector('.password-policy-toggle');
+  const passwordFields = container.querySelector('.password-policy-fields');
+  passwordToggle.addEventListener('change', () => { passwordFields.hidden = !passwordToggle.checked; });
+
+  const kioskToggle = container.querySelector('.kiosk-toggle');
+  const kioskFields = container.querySelector('.kiosk-fields');
+  kioskToggle.addEventListener('change', () => { kioskFields.hidden = !kioskToggle.checked; });
+
+  const wifiToggle = container.querySelector('.wifi-toggle');
+  const wifiFields = container.querySelector('.wifi-fields');
+  wifiToggle.addEventListener('change', () => { wifiFields.hidden = !wifiToggle.checked; });
+
+  const wifiSecurity = container.querySelector('.wifi-security-type');
+  const wifiPassword = container.querySelector('.wifi-password');
+  wifiSecurity.addEventListener('change', () => { wifiPassword.hidden = wifiSecurity.value === 'OPEN'; });
+
+  container.querySelector('.add-kiosk-package-btn').addEventListener('click', () => {
+    container.querySelector('.kiosk-packages-list').insertAdjacentHTML('beforeend', kioskPackageRowHtml(''));
+  });
+  container.querySelector('.add-app-restriction-btn').addEventListener('click', () => {
+    container.querySelector('.app-restrictions-list').insertAdjacentHTML('beforeend', appRestrictionRowHtml(null));
+  });
+  container.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-row-btn')) {
+      e.target.closest('.app-restriction-row, .kiosk-package-row').remove();
+    }
+  });
+  // Delegated (not bound per-row) since rows can be added after this runs -
+  // the APK source fields only ever matter for REQUIRED (see AppRestriction
+  // kdoc: BLOCKED/AVAILABLE never read them).
+  container.addEventListener('change', (e) => {
+    if (!e.target.classList.contains('app-restriction-type')) return;
+    const row = e.target.closest('.app-restriction-row');
+    row.querySelector('.app-restriction-apk-fields').hidden = e.target.value !== 'REQUIRED';
+  });
+}
+
+// Reverse direction of policyFormFieldsHtml() - reads the structured
+// controls back into the exact PolicyDefinition JSON shape the backend
+// expects.
+function policyDefinitionFromForm(container) {
+  const definition = {};
+  POLICY_TOGGLE_FIELDS.forEach(([field]) => {
+    definition[field] = container.querySelector(`[data-field="${field}"]`).checked;
+  });
+
+  const passwordEnabled = container.querySelector('.password-policy-toggle').checked;
+  definition.passwordPolicy = passwordEnabled ? {
+    minLength: container.querySelector('.password-min-length').value ? parseInt(container.querySelector('.password-min-length').value, 10) : null,
+    requireAlphanumeric: container.querySelector('.password-alphanumeric').checked,
+    maxFailedAttemptsBeforeWipe: container.querySelector('.password-max-failed').value ? parseInt(container.querySelector('.password-max-failed').value, 10) : null,
+  } : null;
+
+  const kioskEnabled = container.querySelector('.kiosk-toggle').checked;
+  definition.kioskMode = kioskEnabled ? {
+    enabled: true,
+    allowedPackageNames: Array.from(container.querySelectorAll('.kiosk-package-input')).map((i) => i.value.trim()).filter(Boolean),
+  } : null;
+
+  definition.appRestrictions = Array.from(container.querySelectorAll('.app-restriction-row')).map((row) => {
+    const installType = row.querySelector('.app-restriction-type').value;
+    return {
+      packageName: row.querySelector('.app-restriction-package').value.trim(),
+      installType,
+      // No apkSha256 field here - the backend computes it itself from
+      // apkUrl on save (ApkChecksumService) and always overwrites whatever
+      // was here before, so there's nothing meaningful to submit.
+      apkUrl: installType === 'REQUIRED' ? (row.querySelector('.app-restriction-apk-url').value.trim() || null) : null,
+    };
+  }).filter((r) => r.packageName);
+
+  const wifiEnabled = container.querySelector('.wifi-toggle').checked;
+  definition.wifiConfig = wifiEnabled ? {
+    ssid: container.querySelector('.wifi-ssid').value.trim(),
+    securityType: container.querySelector('.wifi-security-type').value,
+    password: container.querySelector('.wifi-security-type').value === 'OPEN' ? null : (container.querySelector('.wifi-password').value || null),
+    hidden: container.querySelector('.wifi-hidden').checked,
+  } : null;
+
+  return definition;
+}
 
 async function renderPolicies() {
   const content = document.getElementById('content');
@@ -463,10 +654,10 @@ async function renderPolicies() {
       <h2>Policies</h2>
       <details>
         <summary>Create policy</summary>
-        <form id="create-policy-form" class="stacked-form">
+        <form id="create-policy-form" class="stacked-form policy-form">
           <input name="name" placeholder="Name" required>
           <input name="description" placeholder="Description (optional)">
-          <textarea name="definition" rows="7">${escapeHtml(DEFAULT_POLICY_DEFINITION)}</textarea>
+          ${policyFormFieldsHtml(null)}
           <button type="submit">Create</button>
         </form>
         <p id="create-policy-error" class="error"></p>
@@ -491,14 +682,12 @@ async function renderPolicies() {
       </table>
       <div id="policy-detail"></div>`;
 
+    wirePolicyFormFields(content.querySelector('#create-policy-form'));
     content.querySelector('#create-policy-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
-      let definition;
-      try { definition = JSON.parse(fd.get('definition')); } catch (err) {
-        content.querySelector('#create-policy-error').textContent = 'Definition must be valid JSON';
-        return;
-      }
+      const form = e.target;
+      const fd = new FormData(form);
+      const definition = policyDefinitionFromForm(form);
       try {
         await api(`/api/organizations/${state.activeOrgId}/policies`, {
           method: 'POST',
@@ -543,21 +732,19 @@ async function renderPolicyEdit(policyId) {
     const policy = await api(`/api/policies/${policyId}`);
     el.innerHTML = `
       <h4>Edit ${escapeHtml(policy.name)} (currently v${policy.version})</h4>
-      <form id="update-policy-form" class="stacked-form">
-        <textarea name="definition" rows="9">${escapeHtml(JSON.stringify(policy.definition, null, 2))}</textarea>
+      <form id="update-policy-form" class="stacked-form policy-form">
+        ${policyFormFieldsHtml(policy.definition)}
         <input name="changeNote" placeholder="Change note (optional)">
         <button type="submit">Save (bumps to v${policy.version + 1})</button>
       </form>
       <p id="update-policy-error" class="error"></p>`;
 
+    wirePolicyFormFields(el.querySelector('#update-policy-form'));
     el.querySelector('#update-policy-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
-      let definition;
-      try { definition = JSON.parse(fd.get('definition')); } catch (err) {
-        el.querySelector('#update-policy-error').textContent = 'Definition must be valid JSON';
-        return;
-      }
+      const form = e.target;
+      const fd = new FormData(form);
+      const definition = policyDefinitionFromForm(form);
       try {
         await api(`/api/policies/${policyId}`, {
           method: 'PUT',
