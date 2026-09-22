@@ -39,6 +39,13 @@ data class CustomDpcAppRestriction(
     // actually do with each, since a non-GMS device has no Play EMM
     // integration to enforce this automatically.
     val installType: String,
+    // Only ever present when installType is "REQUIRED" and an admin
+    // supplied a source for this package - null means "no install source,
+    // can't force this one" (same as before this field existed). Silent
+    // install is the DPC's job via PackageInstaller (Device Owner apps can
+    // install without user interaction); this only hands it a source.
+    val apkUrl: String? = null,
+    val apkSha256: String? = null,
 )
 
 data class CustomDpcWifiConfig(

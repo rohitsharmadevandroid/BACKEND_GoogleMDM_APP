@@ -26,7 +26,12 @@ class CustomDpcPolicyTranslator {
             CustomDpcKioskMode(enabled = it.enabled, allowedPackageNames = it.allowedPackageNames)
         },
         appRestrictions = definition.appRestrictions.map {
-            CustomDpcAppRestriction(packageName = it.packageName, installType = it.installType.name)
+            CustomDpcAppRestriction(
+                packageName = it.packageName,
+                installType = it.installType.name,
+                apkUrl = it.apkUrl,
+                apkSha256 = it.apkSha256,
+            )
         },
         wifi = definition.wifiConfig?.let {
             CustomDpcWifiConfig(

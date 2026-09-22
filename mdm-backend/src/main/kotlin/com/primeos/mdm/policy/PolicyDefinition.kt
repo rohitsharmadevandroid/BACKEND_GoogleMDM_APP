@@ -36,9 +36,19 @@ data class KioskModeConfig(
 
 enum class AppInstallType { REQUIRED, BLOCKED, AVAILABLE }
 
+// apkUrl/apkSha256 are only meaningful for REQUIRED on a non-GMS device -
+// GMS force-installs via Google's own Managed Google Play pipeline and
+// never looks at these; the custom DPC has no equivalent, so this is the
+// only way it can silently install an app (mirrors the same
+// download-URL-plus-checksum pattern already used for the DPC's own APK,
+// see MDM_DPC_APK_DOWNLOAD_URL/MDM_DPC_APK_SIGNATURE_CHECKSUM). Left null,
+// REQUIRED on non-GMS stays exactly what it was before: a label the DPC
+// can't act on.
 data class AppRestriction(
     val packageName: String,
     val installType: AppInstallType,
+    val apkUrl: String? = null,
+    val apkSha256: String? = null,
 )
 
 enum class WifiSecurityType { OPEN, WPA2_PSK }
